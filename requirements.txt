@@ -1,2 +1,4 @@
 streamlit
 python-barcode
+pandas
+openpyxl
