@@ -73,14 +73,12 @@ with col2:
                 try {{ JsBarcode("#barcode-ean", "{ean_data}", {{...options, format: "EAN13"}}); eanSuccess = true; }} 
                 catch (e) {{ document.getElementById('err-ean').innerText = '输入有误'; }}
 
-                // 单独下载逻辑
                 function downloadSingle(svgId, type, data) {{
                     const svg = document.getElementById(svgId);
                     if (svg.childNodes.length === 0) return;
                     triggerDownload(svg, type + "_" + data + ".svg");
                 }}
 
-                // 核心：合并下载逻辑 (第一性原理：SVG 节点重组)
                 function downloadCombined() {{
                     if (!upcSuccess || !eanSuccess) {{
                         alert("请确保两个条码都已成功生成！");
@@ -90,35 +88,29 @@ with col2:
                     const svgUpc = document.getElementById('barcode-upc');
                     const svgEan = document.getElementById('barcode-ean');
 
-                    // 1. 创建一张新的 A4/标准画板尺寸的父级 SVG
                     const combinedSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
                     combinedSvg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
                     combinedSvg.setAttribute("width", "400");
-                    combinedSvg.setAttribute("height", "400"); // 足够放下上下两个条码
+                    combinedSvg.setAttribute("height", "400"); 
                     combinedSvg.setAttribute("viewBox", "0 0 400 400");
 
-                    // 加入纯白底色（防止部分软件中背景透明变黑）
                     const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
                     bg.setAttribute("width", "100%"); bg.setAttribute("height", "100%"); bg.setAttribute("fill", "#ffffff");
                     combinedSvg.appendChild(bg);
 
-                    // 2. 将 UPC 代码放入群组 <g>，并定位在画布上方
                     const gUpc = document.createElementNS("http://www.w3.org/2000/svg", "g");
-                    gUpc.setAttribute("transform", "translate(50, 30)"); // x=50, y=30
+                    gUpc.setAttribute("transform", "translate(50, 30)");
                     Array.from(svgUpc.childNodes).forEach(node => gUpc.appendChild(node.cloneNode(true)));
                     combinedSvg.appendChild(gUpc);
 
-                    // 3. 将 EAN 代码放入群组 <g>，并定位在画布下方
                     const gEan = document.createElementNS("http://www.w3.org/2000/svg", "g");
-                    gEan.setAttribute("transform", "translate(50, 200)"); // x=50, y=200，避开上方的 UPC
+                    gEan.setAttribute("transform", "translate(50, 200)");
                     Array.from(svgEan.childNodes).forEach(node => gEan.appendChild(node.cloneNode(true)));
                     combinedSvg.appendChild(gEan);
 
-                    // 4. 触发下载
                     triggerDownload(combinedSvg, "Combined_UPC_EAN.svg");
                 }}
 
-                // 通用的序列化下载器
                 function triggerDownload(svgElement, fileName) {{
                     const serializer = new XMLSerializer();
                     let source = serializer.serializeToString(svgElement);
@@ -139,3 +131,15 @@ with col2:
         """
         
         components.html(html_code, height=450)
+
+# --- 页尾署名模块 (Footer) ---
+# 使用 Markdown 结合内联 HTML 控制排版：居中对齐、14px(约5号字)、浅灰色
+st.markdown("<br><br>", unsafe_allow_html=True) # 撑开页面底部的呼吸空间
+st.markdown(
+    """
+    <div style='text-align: center; color: #9ca3af; font-size: 14px; font-family: sans-serif; padding-bottom: 20px;'>
+        Design by GCC
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
