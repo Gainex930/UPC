@@ -1,108 +1,189 @@
 import streamlit as st
 import pandas as pd
-import barcode
-from barcode.writer import SVGWriter
-import zipfile
-from io import BytesIO
-import xml.etree.ElementTree as ET
+import json
+import streamlit.components.v1 as components
 
-# --- 第一性原理：重构专业级 SVG 渲染逻辑 ---
-class ProfessionalSVGWriter(SVGWriter):
-    def __init__(self, remark=""):
-        super().__init__()
-        self.remark = remark
+# --- UI 界面配置 ---
+st.set_page_config(page_title="GCC 终极商业条码工厂", layout="wide")
 
-    def _render(self, code):
-        root = super()._render(code)
-        width = float(root.get("width").replace("mm", ""))
-        height = float(root.get("height").replace("mm", ""))
-        
-        if self.remark:
-            remark_element = ET.SubElement(root, "text", {
-                "x": str(width / 2),
-                "y": str(height + 5),
-                "text-anchor": "middle",
-                "font-family": "sans-serif",
-                "font-size": "3mm",
-                "fill": "black"
-            })
-            remark_element.text = f"REMARK: {self.remark}"
-            root.set("height", f"{height + 10}mm") 
-            
-        return root
-
-# --- 核心逻辑：类型改为直接传入字符串，而非列名 ---
-def generate_bulk_barcodes(df, code_column, target_type, remark_column):
-    zip_buffer = BytesIO()
-    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zip_file:
-        for index, row in df.iterrows():
-            # 提取数字并清理空格
-            data = str(row[code_column]).strip()
-            # 备注处理
-            remark = str(row[remark_column]) if remark_column and remark_column in df.columns else ""
-            
-            try:
-                # 直接使用全局指定的类型 (ean13 或 upc)
-                barcode_class = barcode.get_barcode_class(target_type)
-                writer = ProfessionalSVGWriter(remark=remark)
-                code_inst = barcode_class(data, writer=writer)
-                
-                svg_out = BytesIO()
-                code_inst.write(svg_out, options={"module_height": 15.0, "font_size": 4})
-                
-                # 文件名：序号_类型_数字.svg
-                filename = f"{index+1}_{target_type.upper()}_{data}.svg"
-                zip_file.writestr(filename, svg_out.getvalue())
-            except Exception as e:
-                # 抛出具体的行号、错误数据和错误原因
-                st.warning(f"行 {index+1} 失败 | 试图使用数据: [{data}] | 错误原因: {str(e)}")
-                
-    return zip_buffer.getvalue()
-
-# --- UI 界面 ---
-st.set_page_config(page_title="GCC 批量条码工厂", layout="wide")
-
-st.title("🏭 批量商业条码生成工厂")
+st.title("🏭 商业级双轨批量条码生成工厂 (100%保真)")
 st.markdown("---")
 
-uploaded_file = st.file_uploader("上传表格文件 (支持 .csv, .xlsx)", type=["csv", "xlsx"])
+uploaded_file = st.file_uploader("1. 上传表格文件 (支持 .csv, .xlsx)", type=["csv", "xlsx"])
 
 if uploaded_file:
+    # 数据读取与清洗 (将 NaN 替换为空字符串，防止 JSON 解析报错)
     df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-    st.write("✅ 数据读取成功，预览前 5 行：", df.head())
+    df = df.fillna("")
     
-    st.markdown("### ⚙️ 流水线配置")
+    st.write("✅ 数据读取成功，预览前 3 行：", df.head(3))
+    
+    st.markdown("### ⚙️ 2. 数据字段映射")
+    st.info("💡 提示：你可以同时选择 UPC 和 EAN 列，程序会为每一行数据同时生成这两个格式的矢量文件，并统一打包。")
+    
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        # 修正1：确保用户选对数据源
-        code_col = st.selectbox("1. 【数据源】提取哪一列生成条码？", df.columns, index=len(df.columns)-1)
+        # 允许不选择某一种码
+        options_with_none = ["-- 不生成此码 --"] + list(df.columns)
+        upc_col = st.selectbox("🇺🇸 【UPC】数据来源列", options_with_none, index=list(df.columns).index('UPC/69码')+1 if 'UPC/69码' in df.columns else 0)
     
     with col2:
-        # 修正2：废弃原先的列选择，改为直接指定本批次的格式
-        target_type = st.radio("2. 【条码规范】本批次生成什么格式？", ["EAN13", "UPC"])
+        ean_col = st.selectbox("🌍 【EAN】数据来源列", options_with_none, index=list(df.columns).index('EAN')+1 if 'EAN' in df.columns else 0)
     
     with col3:
-        # 备注列逻辑不变
-        remark_col = st.selectbox("3. 【备注信息】(可选，印在底部)", ["不需要备注"] + list(df.columns))
+        remark_col = st.selectbox("📝 【备注】(印在条码底部)", ["-- 不添加备注 --"] + list(df.columns), index=list(df.columns).index('产品名称')+1 if '产品名称' in df.columns else 0)
 
-    if st.button("🚀 开始批量处理并打包"):
-        with st.spinner("正在通过 GCC 矢量引擎渲染..."):
-            final_remark_col = None if remark_col == "不需要备注" else remark_col
-            # 将 target_type 转换为小写传给底层引擎
-            zip_data = generate_bulk_barcodes(df, code_col, target_type.lower(), final_remark_col)
-            
-            st.success("✅ 批量渲染完成！")
-            st.download_button(
-                label="📥 下载 ZIP 矢量打包文件",
-                data=zip_data,
-                file_name=f"GCC_{target_type}_Barcodes.zip",
-                mime="application/zip",
-                use_container_width=True
-            )
+    # 提取需要传递给前端的数据
+    if upc_col != "-- 不生成此码 --" or ean_col != "-- 不生成此码 --":
+        # 构建干净的字典列表传递给 JS
+        batch_data = []
+        for index, row in df.iterrows():
+            batch_data.append({
+                "row_index": index + 1,
+                "upc": str(row[upc_col]).strip() if upc_col != "-- 不生成此码 --" else "",
+                "ean": str(row[ean_col]).strip() if ean_col != "-- 不生成此码 --" else "",
+                "remark": str(row[remark_col]).strip() if remark_col != "-- 不添加备注 --" else ""
+            })
+        
+        # 将 Python 数据转为 JSON 字符串
+        json_data = json.dumps(batch_data)
+
+        # --- 核心前端渲染沙盒 (JSZip + JsBarcode) ---
+        html_code = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+            <style>
+                body {{ font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f8f9fa; }}
+                .btn-master {{ background-color: #2563eb; color: white; font-size: 18px; font-weight: bold; padding: 15px 30px; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 4px 12px rgba(37,99,235,0.3); transition: all 0.2s; }}
+                .btn-master:hover {{ background-color: #1d4ed8; transform: translateY(-2px); }}
+                #status {{ margin-top: 15px; font-size: 14px; color: #4b5563; }}
+            </style>
+        </head>
+        <body>
+            <button class="btn-master" onclick="startBatchProcess()">🚀 启动引擎：生成并下载 ZIP 打包文件</button>
+            <div id="status">等待执行... (共 {len(batch_data)} 行数据)</div>
+
+            <script>
+                // 接收 Python 传来的 JSON 数据
+                const batchData = {json_data};
+                
+                // 核心渲染函数：生成完美排版的 SVG 字符串
+                function generateSVGStr(code, format, remark) {{
+                    if (!code) return null;
+                    
+                    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                    try {{
+                        JsBarcode(svg, code, {{
+                            format: format,
+                            lineColor: "#000", width: 2, height: 80, displayValue: true, fontSize: 20, textMargin: 2, background: "#ffffff"
+                        }});
+
+                        // 动态追加备注文本
+                        if (remark) {{
+                            const width = parseInt(svg.getAttribute("width") || 200);
+                            const height = parseInt(svg.getAttribute("height") || 142);
+                            
+                            // 撑高画板，留出文字空间
+                            const newHeight = height + 25;
+                            svg.setAttribute("height", newHeight);
+                            svg.setAttribute("viewBox", `0 0 ${{width}} ${{newHeight}}`);
+                            
+                            // 追加白底防穿透
+                            const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                            bg.setAttribute("width", "100%"); bg.setAttribute("height", "100%"); bg.setAttribute("fill", "#ffffff");
+                            svg.insertBefore(bg, svg.firstChild);
+
+                            // 写入文本
+                            const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                            text.setAttribute("x", width / 2);
+                            text.setAttribute("y", height + 18);
+                            text.setAttribute("text-anchor", "middle");
+                            text.setAttribute("font-family", "sans-serif");
+                            text.setAttribute("font-size", "14px");
+                            text.setAttribute("font-weight", "bold");
+                            text.setAttribute("fill", "#374151");
+                            text.textContent = remark;
+                            svg.appendChild(text);
+                        }}
+                        
+                        // 序列化标准化
+                        let source = new XMLSerializer().serializeToString(svg);
+                        if(!source.match(/^<svg[^>]+xmlns="http\\:\\/\\/www\\.w3\\.org\\/2000\\/svg"/)){{
+                            source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+                        }}
+                        return '<?xml version="1.0" standalone="no"?>\\r\\n' + source;
+                    }} catch (e) {{
+                        console.warn("跳过无效编码: " + code, e);
+                        return null;
+                    }}
+                }}
+
+                // 批处理主进程
+                async function startBatchProcess() {{
+                    const btn = document.querySelector('.btn-master');
+                    const status = document.getElementById('status');
+                    btn.innerText = "⏳ 正在极速渲染打包中...";
+                    btn.disabled = true;
+                    btn.style.backgroundColor = "#9ca3af";
+                    
+                    const zip = new JSZip();
+                    let successCount = 0;
+                    let errorCount = 0;
+
+                    batchData.forEach(row => {{
+                        // 生成 UPC
+                        if (row.upc) {{
+                            const upcSVG = generateSVGStr(row.upc, "UPC", row.remark);
+                            if (upcSVG) {{
+                                // 命名规范：行号_类型_编码_备注.svg (文件名过滤非法字符)
+                                const safeRemark = row.remark.replace(/[\\\\/:*?"<>|]/g, "_");
+                                const suffix = safeRemark ? `_${{safeRemark}}` : "";
+                                zip.file(`${{row.row_index}}_UPC_${{row.upc}}${{suffix}}.svg`, upcSVG);
+                                successCount++;
+                            }} else {{ errorCount++; }}
+                        }}
+                        
+                        // 生成 EAN
+                        if (row.ean) {{
+                            const eanSVG = generateSVGStr(row.ean, "EAN13", row.remark);
+                            if (eanSVG) {{
+                                const safeRemark = row.remark.replace(/[\\\\/:*?"<>|]/g, "_");
+                                const suffix = safeRemark ? `_${{safeRemark}}` : "";
+                                zip.file(`${{row.row_index}}_EAN_${{row.ean}}${{suffix}}.svg`, eanSVG);
+                                successCount++;
+                            }} else {{ errorCount++; }}
+                        }}
+                    }});
+
+                    status.innerText = `📦 正在生成 ZIP... (成功: ${{successCount}}, 失败: ${{errorCount}})`;
+
+                    // 打包下载
+                    zip.generateAsync({{type:"blob"}}).then(function(content) {{
+                        saveAs(content, "GCC_Commercial_Barcodes.zip");
+                        btn.innerText = "✅ 下载完成 (点击可重新打包)";
+                        btn.disabled = false;
+                        btn.style.backgroundColor = "#2563eb";
+                        status.innerText = `🎉 任务完成！共导出 ${{successCount}} 个矢量条码。`;
+                    }});
+                }}
+            </script>
+        </body>
+        </html>
+        """
+        
+        # 渲染执行按钮区
+        st.markdown("### 🚀 3. 执行生产引擎")
+        components.html(html_code, height=150)
+    else:
+        st.warning("⚠️ 请至少选择一列(UPC或EAN)作为数据来源。")
 
 # --- 页尾署名 ---
-st.markdown("<br><br>", unsafe_allow_html=True)
+st.markdown("<br><br><br>", unsafe_allow_html=True)
 st.markdown(
     "<div style='text-align: center; color: #9ca3af; font-size: 14px; font-family: sans-serif; padding-bottom: 20px;'>Design by GCC</div>", 
     unsafe_allow_html=True
